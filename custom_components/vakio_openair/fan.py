@@ -28,16 +28,19 @@ from .const import (
 )
 from .vakio import Coordinator
 
-percentage = ordered_list_item_to_percentage(OPENAIR_SPEED_LIST, OPENAIR_SPEED_01)
+percentage = ordered_list_item_to_percentage(
+    OPENAIR_SPEED_LIST, OPENAIR_SPEED_01)
 named_speed = percentage_to_ordered_list_item(OPENAIR_SPEED_LIST, 20)
 
 FULL_SUPPORT = (
     FanEntityFeature.SET_SPEED
     | FanEntityFeature.DIRECTION
+    | FanEntityFeature.TURN_ON
+    | FanEntityFeature.TURN_OFF
     | FanEntityFeature.OSCILLATE
     | FanEntityFeature.PRESET_MODE
 )
-LIMITED_SUPPORT = FanEntityFeature.SET_SPEED | FanEntityFeature.PRESET_MODE
+LIMITED_SUPPORT = FanEntityFeature.SET_SPEED | FanEntityFeature.PRESET_MODE | FanEntityFeature.TURN_ON | FanEntityFeature.TURN_OFF
 PRESET_MOD_GATE_01 = "Gate 1"
 PRESET_MOD_GATE_02 = "Gate 2"
 PRESET_MOD_GATE_03 = "Gate 3"
@@ -221,7 +224,8 @@ class VakioOpenAirFan(VakioOpenAirFanBase, FanEntity):
         # Получение именованой скорости.
         new_speed: decimal.Decimal = decimal.Decimal(0)
         if percentage is not None:
-            new_speed = percentage_to_ordered_list_item(OPENAIR_SPEED_LIST, percentage)  # type: ignore
+            new_speed = percentage_to_ordered_list_item(
+                OPENAIR_SPEED_LIST, percentage)  # type: ignore
         else:
             new_speed = OPENAIR_SPEED_01  # type: ignore
 
