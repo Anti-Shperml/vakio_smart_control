@@ -1,4 +1,5 @@
 """Constants for the Vakio Openair integration."""
+
 import datetime
 
 from homeassistant.const import Platform
@@ -23,6 +24,7 @@ CONF_PORT = "port"
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
 CONF_TOPIC = "topic"
+CONF_PREFIX = "topic"
 
 # OPT consts
 OPT_EMERG_SHUNT = "emerg_shunt"
@@ -66,3 +68,20 @@ OPENAIR_GATE_LIST = [
     OPENAIR_GATE_03,
     OPENAIR_GATE_04,
 ]
+
+SPEED_ENDPOINT = "speed"
+GATE_ENDPOINT = "gate"
+STATE_ENDPOINT = "state"
+WORKMODE_ENDPOINT = "workmode"
+TEMP_ENDPOINT = "temp"
+HUD_ENDPOINT = "hud"
+ENDPOINTS = [
+    SPEED_ENDPOINT,
+    GATE_ENDPOINT,
+    STATE_ENDPOINT,
+    WORKMODE_ENDPOINT,
+    TEMP_ENDPOINT,
+    HUD_ENDPOINT,
+]
+
+DEFAULT_PREFIX = "vakio"

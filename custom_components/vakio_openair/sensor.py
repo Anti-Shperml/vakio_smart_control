@@ -1,64 +1,17 @@
-"""Sensor platform that has a temperature and humidity sensors."""
-from __future__ import annotations
+"""Sensor platform."""
 
-from datetime import datetime, timedelta
+import logging
 
-from homeassistant.components.sensor import (
-    SensorDeviceClass,
-    SensorEntity,
-    SensorStateClass,
-)
+from homeassistant.components import mqtt
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_BATTERY_LEVEL, PERCENTAGE, UnitOfTemperature
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.const import PERCENTAGE, UnitOfTemperature
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_time_interval
-from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType, StateType
 
-from . import DOMAIN
-from .vakio import Coordinator
+from .const import CONF_PREFIX, DEFAULT_PREFIX, DOMAIN, HUD_ENDPOINT, TEMP_ENDPOINT
 
-
-async def async_setup_platform(
-    hass: HomeAssistant,
-    conf: ConfigType,
-    async_add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
-) -> None:
-    """Set up the Demo sensors."""
-    topic = conf.data["topic"]  # type: ignore
-    temp = VakioSensor(
-        hass,
-        conf.entry_id,  # type: ignore
-        f"{topic}_temp",
-        "OpenAir Temp Sensor",
-        0,
-        SensorDeviceClass.TEMPERATURE,
-        SensorStateClass.MEASUREMENT,
-        UnitOfTemperature.CELSIUS,
-    )
-    hud = VakioSensor(
-        hass,
-        conf.entry_id,  # type: ignore
-        f"{topic}_hud",
-        "OpenAir Humidity Sensor",
-        0,
-        SensorDeviceClass.HUMIDITY,
-        SensorStateClass.MEASUREMENT,
-        PERCENTAGE,
-    )
-    async_add_entities([temp, hud])
-    async_track_time_interval(
-        hass,
-        temp._async_update,  # pylint: disable=protected-access
-        timedelta(seconds=30),
-    )
-    async_track_time_interval(
-        hass,
-        hud._async_update,  # pylint: disable=protected-access
-        timedelta(seconds=30),
-    )
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -66,58 +19,87 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up config entry."""
-    await async_setup_platform(hass, config_entry, async_add_entities)  # type: ignore
+    """Set up OpenAir sensor devices from a config entry."""
+    config = hass.data[DOMAIN][config_entry.entry_id]
+    prefix = config.get(CONF_PREFIX, DEFAULT_PREFIX)
+
+    async_add_entities(
+        [
+            OpenAirTemperatureSensor(hass, prefix, config_entry.entry_id),
+            OpenAirHumiditySensor(hass, prefix, config_entry.entry_id),
+        ]
+    )
 
 
-class VakioSensor(SensorEntity):
-    """Реализация сенсора устройства Vakio."""
+class OpenAirTemperatureSensor(SensorEntity):
+    """Representation of an OpenAir temperature sensor."""
 
-    _attr_should_poll = False
-
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        entry_id: str,
-        unique_id: str,
-        name: str | None,
-        state: StateType,
-        device_class: SensorDeviceClass,
-        state_class: SensorStateClass | None,
-        unit_of_measurement: str | None,
-        battery: StateType | None = None,
-        options: list[str] | None = None,
-        translation_key: str | None = None,
-    ) -> None:
+    def __init__(self, hass, prefix, entry_id):
         """Initialize the sensor."""
-        self.hass = hass
-        self.coordinator: Coordinator = hass.data[DOMAIN][entry_id]
-        self._entity_id = entry_id
-        self._attr_device_class = device_class
-        if name is not None:
-            self._attr_name = name
-        else:
-            self._attr_has_entity_name = True
-        self._attr_native_unit_of_measurement = unit_of_measurement
-        self._attr_native_value = state
-        self._attr_state_class = state_class
-        self._attr_unique_id = unique_id
-        self._attr_options = options
-        self._attr_translation_key = translation_key
+        self._hass = hass
+        self._prefix = prefix
+        self.unique_id = f"{entry_id}_temp_{prefix}"
+        self._state = None
+        self._sub_temp = None
+        self._attr_name = "OpenAir Temperature"
 
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, unique_id)},
-            name=name,
+    async def async_added_to_hass(self):
+        """Subscribe to MQTT events."""
+        await super().async_added_to_hass()
+
+        await mqtt.async_subscribe(
+            self.hass, f"{self._prefix}/{TEMP_ENDPOINT}", self._handle_temp_message
         )
 
-        if battery:
-            self._attr_extra_state_attributes = {ATTR_BATTERY_LEVEL: battery}
+    @property
+    def state(self):
+        """Return the state of the sensor."""
+        return self._state
 
-    async def _async_update(self, now: datetime) -> None:
-        if self._attr_device_class == SensorDeviceClass.TEMPERATURE:
-            val = self.coordinator.get_temp()
-        else:
-            val = self.coordinator.get_hud()
+    @property
+    def unit_of_measurement(self):
+        """Return the unit of measurement."""
+        return UnitOfTemperature.CELSIUS
 
-        self._attr_native_value = val if val is not None else 20
+    @callback
+    def _handle_temp_message(self, msg):
+        """Handle new temperature messages."""
+        self._state = float(msg.payload)
+        self.async_write_ha_state()
+
+
+class OpenAirHumiditySensor(SensorEntity):
+    """Representation of an OpenAir humidity sensor."""
+
+    def __init__(self, hass, prefix, entry_id):
+        """Initialize the sensor."""
+        self._hass = hass
+        self._prefix = prefix
+        self.unique_id = f"{entry_id}_hud_{prefix}"
+        self._state = None
+        self._sub_hud = None
+        self._attr_name = "OpenAir Humidity"
+
+    async def async_added_to_hass(self):
+        """Subscribe to MQTT events."""
+        await super().async_added_to_hass()
+
+        await mqtt.async_subscribe(
+            self.hass, f"{self._prefix}/{HUD_ENDPOINT}", self._handle_hud_message
+        )
+
+    @property
+    def state(self):
+        """Return the state of the sensor."""
+        return self._state
+
+    @property
+    def unit_of_measurement(self):
+        """Return the unit of measurement."""
+        return PERCENTAGE
+
+    @callback
+    def _handle_hud_message(self, msg):
+        """Handle new humidity messages."""
+        self._state = float(msg.payload)
         self.async_write_ha_state()
