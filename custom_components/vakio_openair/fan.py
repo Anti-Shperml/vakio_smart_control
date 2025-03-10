@@ -21,6 +21,7 @@ from .const import (
     DEFAULT_PREFIX,
     DOMAIN,
     GATE_ENDPOINT,
+    OPENAIR_GATE_04,
     OPENAIR_GATE_LIST,
     OPENAIR_SPEED_00,
     OPENAIR_SPEED_01,
@@ -53,6 +54,7 @@ LIMITED_SUPPORT = (
     | FanEntityFeature.TURN_ON
     | FanEntityFeature.TURN_OFF
 )
+PRESET_MOD_GATE_00 = "Gate 0"
 PRESET_MOD_GATE_01 = "Gate 1"
 PRESET_MOD_GATE_02 = "Gate 2"
 PRESET_MOD_GATE_03 = "Gate 3"
@@ -60,13 +62,15 @@ PRESET_MOD_GATE_04 = "Gate 4"
 PRESET_MOD_SUPER_AUTO = "Super Auto"
 
 PRESET_MOD_GATES = {
-    PRESET_MOD_GATE_01: OPENAIR_GATE_LIST[0],
-    PRESET_MOD_GATE_02: OPENAIR_GATE_LIST[1],
-    PRESET_MOD_GATE_03: OPENAIR_GATE_LIST[2],
-    PRESET_MOD_GATE_04: OPENAIR_GATE_LIST[3],
+    PRESET_MOD_GATE_00: OPENAIR_GATE_LIST[0],
+    PRESET_MOD_GATE_01: OPENAIR_GATE_LIST[1],
+    PRESET_MOD_GATE_02: OPENAIR_GATE_LIST[2],
+    PRESET_MOD_GATE_03: OPENAIR_GATE_LIST[3],
+    PRESET_MOD_GATE_04: OPENAIR_GATE_LIST[4],
 }
 
 PRESET_MODS = [
+    PRESET_MOD_GATE_00,
     PRESET_MOD_GATE_01,
     PRESET_MOD_GATE_02,
     PRESET_MOD_GATE_03,
@@ -122,6 +126,11 @@ class VakioOpenAirFan(FanEntity):
         self._preset_mode: str | None = None
         self._attr_name = name
         self._entity_id = entry_id
+        self._state = False
+        self._attr_is_on = None
+
+        self._prev_preset_mode: str | None = None
+        self._prev_percentage: int | None = None
 
         self._sub_state = None
         self._sub_speed = None
@@ -182,36 +191,33 @@ class VakioOpenAirFan(FanEntity):
         percentage: int,  # pylint: disable=redefined-outer-name
     ) -> None:
         """Установка скорости работы вентиляции в процентах."""
-        current_workmode = (
-            OPENAIR_WORKMODE_SUPERAUTO
-            if self._preset_mode == PRESET_MOD_SUPER_AUTO
-            else OPENAIR_WORKMODE_MANUAL
-        )
-
-        if current_workmode == OPENAIR_WORKMODE_SUPERAUTO:
+        if self._preset_mode == PRESET_MOD_SUPER_AUTO:
             return self.async_write_ha_state()
 
-        self._percentage = percentage
+        self._prev_percentage = self.percentage
         if percentage == 0:
             await self.async_publish(
                 f"{self._prefix}/{SPEED_ENDPOINT}", OPENAIR_SPEED_00
             )
             return self.async_write_ha_state()
 
-        await self.async_turn_on()
-        # Получение именованой скорости.
         speed: decimal.Decimal = percentage_to_ordered_list_item(
             OPENAIR_SPEED_LIST,
             percentage,
         )
+        if not self._state:
+            await self.async_turn_on(percentage)
+        else:
+            await self.async_publish(f"{self._prefix}/{SPEED_ENDPOINT}", speed)
 
-        await self.async_publish(f"{self._prefix}/{SPEED_ENDPOINT}", speed)
         return self.async_write_ha_state()
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Переключение режима работы на основе пресета."""
         if self.preset_modes and preset_mode not in self.preset_modes:
             raise ValueError(f"Неизвестный режим: {preset_mode}")
+
+        self._prev_preset_mode = self._preset_mode
 
         # self._preset_mode = preset_mode
         if preset_mode in PRESET_MOD_GATES:
@@ -229,18 +235,17 @@ class VakioOpenAirFan(FanEntity):
                 await self.async_publish(
                     f"{self._prefix}/{SPEED_ENDPOINT}", OPENAIR_SPEED_00
                 )
+                self._percentage = 0
 
             await self.async_publish(
                 f"{self._prefix}/{GATE_ENDPOINT}", PRESET_MOD_GATES[preset_mode]
             )
             self._preset_mode = preset_mode
-            return
-
-        if self._preset_mode == PRESET_MOD_SUPER_AUTO:
+        elif preset_mode == PRESET_MOD_SUPER_AUTO:
             await self.async_publish(
                 f"{self._prefix}/{WORKMODE_ENDPOINT}", OPENAIR_WORKMODE_SUPERAUTO
             )
-            return
+            self._preset_mode = preset_mode
 
         self.async_write_ha_state()
 
@@ -254,14 +259,28 @@ class VakioOpenAirFan(FanEntity):
         await self.async_publish(f"{self._prefix}/{STATE_ENDPOINT}", OPENAIR_STATE_ON)
 
         # Получение именованой скорости.
-        new_speed: decimal.Decimal = decimal.Decimal(0)
-        if percentage is not None:
-            new_speed = percentage_to_ordered_list_item(OPENAIR_SPEED_LIST, percentage)
-        else:
-            new_speed = OPENAIR_SPEED_01
+        if percentage is None:
+            if self._prev_percentage is not None:
+                percentage = self._prev_percentage
+                self._prev_percentage = None
+            else:
+                percentage = ordered_list_item_to_percentage(
+                    OPENAIR_SPEED_LIST, OPENAIR_SPEED_01
+                )
+
+        await self.async_set_percentage(percentage)
+
+        if preset_mode is None:
+            if self._prev_preset_mode is not None:
+                preset_mode = self._prev_preset_mode
+                self._prev_preset_mode = None
+            else:
+                preset_mode = PRESET_MOD_GATE_04
+
+        await self.async_set_preset_mode(preset_mode)
 
         self._state = True
-        await self.async_publish(f"{self._prefix}/{SPEED_ENDPOINT}", new_speed)
+        self._attr_is_on = True
 
         self.async_write_ha_state()
 
@@ -269,7 +288,9 @@ class VakioOpenAirFan(FanEntity):
         """Выключение устройства."""
         await self.async_publish(f"{self._prefix}/{STATE_ENDPOINT}", OPENAIR_STATE_OFF)
         self._state = False
-        self._percentage = 0
+        self._attr_is_on = False
+        self._percentage = None
+        self._preset_mode = None
 
         self.async_write_ha_state()
 
@@ -277,14 +298,12 @@ class VakioOpenAirFan(FanEntity):
     def _handle_state_message(self, msg):
         """Handle new state messages."""
         self._state = msg.payload.lower() == "on"
-
+        self._attr_is_on = self._state
         if not self._state:
-            self._percentage = 0
-        else:
-            self._percentage = ordered_list_item_to_percentage(
-                OPENAIR_SPEED_LIST, OPENAIR_SPEED_01
-            )
-
+            self._prev_percentage = self._percentage
+            self._percentage = None
+            self._prev_preset_mode = self._preset_mode
+            self._preset_mode = None
         self.async_write_ha_state()
 
     @callback
@@ -301,6 +320,7 @@ class VakioOpenAirFan(FanEntity):
                 return
             if speed == 0:
                 self._percentage = 0
+                self.async_write_ha_state()
                 return
 
             speed -= 1
@@ -309,8 +329,7 @@ class VakioOpenAirFan(FanEntity):
                 OPENAIR_SPEED_LIST, named_speed
             )
 
-            if self._percentage != new_speed_percentage:
-                self._percentage = new_speed_percentage
+            self._percentage = new_speed_percentage
 
             self.async_write_ha_state()
         except ValueError:
@@ -325,7 +344,7 @@ class VakioOpenAirFan(FanEntity):
         try:
             gate_value = int(msg.payload)
 
-            if gate_value != 4:
+            if gate_value != OPENAIR_GATE_04:
                 self._percentage = 0
 
             for name, value in PRESET_MOD_GATES.items():
